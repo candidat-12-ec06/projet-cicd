@@ -1,0 +1,55 @@
+name: 01 - CI - Build et test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v4
+
+      - name: Vérifier les fichiers attendus
+        run: |
+          test -f Dockerfile
+          test -f compose.yml
+          test -f site/index.html
+          test -f site/version.json
+          test -f docs/08-compte-rendu-final.md
+
+      - name: Vérifier la syntaxe Docker Compose
+        run: docker compose config
+
+      - name: Construire l'image Docker
+        run: docker build --pull -t projet-cicd:${{ github.sha }} .
+
+      - name: Tester le conteneur avec HTTP
+        run: |
+          docker run -d --name site-test -p 8080:80 projet-cicd:${{ github.sha }}
+          for i in {1..10}; do
+            if curl -fsS http://127.0.0.1:8080/ >/tmp/index.html; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8080/
+          curl -fsS http://127.0.0.1:8080/version.json
+          grep -i "Projet CICD" /tmp/index.html
+
+      - name: Résumé CI
+        run: |
+          echo "## CI Projet CICD" >> $GITHUB_STEP_SUMMARY
+          echo "Image locale testée : projet-cicd:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "Test HTTP : OK" >> $GITHUB_STEP_SUMMARY
+
+      - name: Nettoyage
+        if: always()
+        run: |
+          docker logs site-test || true
+          docker rm -f site-test || true

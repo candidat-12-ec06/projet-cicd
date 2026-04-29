@@ -1,0 +1,37 @@
+services:
+  web:
+    build: .
+    image: projet-cicd-nginx:local
+    expose:
+      - "80"
+    ports:
+      - "8080:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - cicd_net
+
+  tester:
+    image: curlimages/curl:8.12.1
+    depends_on:
+      web:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo '=== Test index.html ===' &&
+        curl -fsS http://web/ &&
+        echo '' &&
+        echo '=== Test version.json ===' &&
+        curl -fsS http://web/version.json &&
+        echo '' &&
+        echo '=== Tous les tests OK ==='
+      "
+    networks:
+      - cicd_net
+
+networks:
+  cicd_net:
+    driver: bridge

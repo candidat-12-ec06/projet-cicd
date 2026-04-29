@@ -1,0 +1,84 @@
+name: 03 - Promotion recette vers production-simulee
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: "Tag GHCR à promouvoir, par exemple latest ou sha-abcdef0"
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate-recette:
+    name: Validation recette simulée
+    runs-on: ubuntu-latest
+    environment: recette
+    steps:
+      - name: Préparer le nom d'image GHCR
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Connexion à GHCR avec GITHUB_TOKEN
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Télécharger l'image existante sans rebuild
+        run: docker pull ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }}
+
+      - name: Tester l'image en recette simulée
+        run: |
+          docker run -d --name recette -p 8080:80 ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }}
+          for i in {1..10}; do
+            if curl -fsS http://127.0.0.1:8080/ >/tmp/index.html; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8080/
+          curl -fsS http://127.0.0.1:8080/version.json
+
+      - name: Résumé recette
+        run: |
+          DIGEST=$(docker image inspect ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }} --format='{{index .RepoDigests 0}}' || true)
+          echo "## Validation recette simulée" >> $GITHUB_STEP_SUMMARY
+          echo "Image source : ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "Digest observé : $DIGEST" >> $GITHUB_STEP_SUMMARY
+
+      - name: Nettoyage recette
+        if: always()
+        run: docker rm -f recette || true
+
+  promote-production-simulee:
+    name: Promotion production-simulee sans rebuild
+    runs-on: ubuntu-latest
+    needs: validate-recette
+    environment: production-simulee
+    steps:
+      - name: Préparer le nom d'image GHCR
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Connexion à GHCR avec GITHUB_TOKEN
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promouvoir le même artefact
+        run: |
+          docker pull ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }}
+          docker tag ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }} ghcr.io/${{ env.IMAGE_NAME }}:production-simulee
+          docker push ghcr.io/${{ env.IMAGE_NAME }}:production-simulee
+
+      - name: Résumé promotion
+        run: |
+          echo "## Promotion production-simulee" >> $GITHUB_STEP_SUMMARY
+          echo "Source : ghcr.io/${{ env.IMAGE_NAME }}:${{ inputs.source_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "Cible : ghcr.io/${{ env.IMAGE_NAME }}:production-simulee" >> $GITHUB_STEP_SUMMARY
+          echo "Mode : promotion sans rebuild" >> $GITHUB_STEP_SUMMARY
